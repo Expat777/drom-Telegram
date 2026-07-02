@@ -23,3 +23,11 @@ def telegram_creds() -> tuple[int | None, str | None, str]:
 
 def model_path() -> str:
     return os.environ.get("MODEL_PATH", "/opt/model_store/price_model.joblib")
+
+
+def llm_config() -> tuple[str | None, str | None, str]:
+    """(api_key, base_url, model). Пустой api_key => LLM выключен."""
+    api_key = os.environ.get("LLM_API_KEY") or None
+    base_url = os.environ.get("LLM_BASE_URL") or None
+    model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    return api_key, base_url, model

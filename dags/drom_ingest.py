@@ -11,6 +11,8 @@ DAG drom_ingest — раз в 10 минут тянет объявления с d
 from __future__ import annotations
 
 import json
+import random
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -25,10 +27,50 @@ from common.db import connection
 # базовые страницы выдачи; PAGES — сколько страниц пагинации обходить
 DROM_LIST_URLS = ["https://auto.drom.ru/all/"]
 PAGES = 3
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-}
+
+# Антибот drom: не долбим сервер в лоб.
+#   - ротация User-Agent (пул реальных браузеров);
+#   - случайная задержка между страницами;
+#   - ретраи с экспоненциальным бэкоффом на сетевые ошибки и 429/5xx.
+USER_AGENTS = [
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/121.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
+]
+MAX_RETRIES = 3
+DELAY_RANGE = (2.0, 5.0)   # секунды между запросами страниц
+
+
+def _headers() -> dict:
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "ru,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+
+def _fetch(url: str) -> str | None:
+    """Скачивает страницу с ретраями/бэкоффом. Возвращает HTML или None."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(url, timeout=25, headers=_headers())
+            if resp.status_code == 429 or resp.status_code >= 500:
+                raise requests.HTTPError(f"status {resp.status_code}")
+            resp.raise_for_status()
+            resp.encoding = "windows-1251"   # ВАЖНО: drom в windows-1251
+            return resp.text
+        except Exception as e:  # noqa: BLE001
+            wait = 2 ** attempt + random.uniform(0, 1)
+            print(f"[drom] попытка {attempt}/{MAX_RETRIES} не удалась для {url}: "
+                  f"{e}; жду {wait:.1f}s")
+            if attempt < MAX_RETRIES:
+                time.sleep(wait)
+    print(f"[drom] не смог скачать {url} после {MAX_RETRIES} попыток")
+    return None
 
 
 def _parse_card(card) -> dict | None:
@@ -48,17 +90,19 @@ def _parse_card(card) -> dict | None:
 
 def scrape_drom() -> list[dict]:
     items: list[dict] = []
+    first_request = True
     for base in DROM_LIST_URLS:
         for page in range(1, PAGES + 1):
             url = base if page == 1 else f"{base}?page={page}"
-            try:
-                resp = requests.get(url, timeout=25, headers=HEADERS)
-                resp.raise_for_status()
-                resp.encoding = "windows-1251"   # ВАЖНО
-            except Exception as e:  # noqa: BLE001
-                print(f"[drom] не смог скачать {url}: {e}")
+            # вежливая задержка перед каждым запросом, кроме самого первого
+            if not first_request:
+                time.sleep(random.uniform(*DELAY_RANGE))
+            first_request = False
+
+            html = _fetch(url)
+            if html is None:
                 continue
-            soup = BeautifulSoup(resp.text, "html.parser")
+            soup = BeautifulSoup(html, "html.parser")
             cards = soup.select('[data-ftid="bulls-list_bull"]')
             for c in cards:
                 parsed = _parse_card(c)
@@ -79,13 +123,20 @@ def ingest(**_):
     now = datetime.now(timezone.utc)
     with connection() as conn:
         for r in rows:
+            # ON CONFLICT (url) — не копим дубли при частых прогонах,
+            # но обновляем снимок карточки (цена/пробег могли измениться).
             conn.execute(
-                text("INSERT INTO drom_raw (url, raw, collected_at) "
-                     "VALUES (:url, :raw, :ts)"),
+                text("""
+                    INSERT INTO drom_raw (url, raw, collected_at)
+                    VALUES (:url, :raw, :ts)
+                    ON CONFLICT (url) DO UPDATE SET
+                        raw = EXCLUDED.raw,
+                        collected_at = EXCLUDED.collected_at
+                """),
                 {"url": r["url"], "raw": json.dumps(r, ensure_ascii=False),
                  "ts": now},
             )
-    print(f"[drom] вставлено строк: {len(rows)}")
+    print(f"[drom] обработано строк (insert/update): {len(rows)}")
 
 
 with DAG(

@@ -8,6 +8,11 @@ CREATE TABLE IF NOT EXISTS drom_raw (
     collected_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Один url = одна строка: даёт опору для ON CONFLICT в drom_ingest и не даёт
+-- копить дубли при частых прогонах. CREATE UNIQUE INDEX IF NOT EXISTS
+-- идемпотентен и применяется в т.ч. к уже существующей таблице.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_drom_raw_url ON drom_raw (url);
+
 -- Сырые сообщения из телеграм-каналов
 CREATE TABLE IF NOT EXISTS telegram_raw (
     id           BIGSERIAL PRIMARY KEY,
