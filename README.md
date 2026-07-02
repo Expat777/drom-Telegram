@@ -9,7 +9,7 @@
 | postgres        | 5432 | БД: `cars` (данные) + `airflow`, `superset` (метаданные) |
 | airflow         | 8080 | DAG'и сбора/нормализации/обучения |
 | superset        | 8088 | дашборд по `car_listings` |
-| prediction-api  | 8000 | ссылка → предсказанная цена |
+| prediction-api  | 8010 | ссылка → предсказанная цена (внутри контейнера — 8000, см. `PREDICTION_PORT`) |
 
 DAG'и: `drom_ingest`, `telegram_ingest`, `normalize_car_listings`, `train_price_model`.
 Таблицы: `drom_raw`, `telegram_raw`, `car_listings`.
@@ -92,9 +92,9 @@ docker compose exec prediction-api python train.py
   `postgresql+psycopg2://<POSTGRES_USER>:<POSTGRES_PASSWORD>@postgres:5432/cars`,
   затем Dataset `car_listings` → собрать чарты (средняя цена по маркам, динамика по
   регионам, drom vs telegram) → дашборд.
-- **Сервис:** форма на `http://<server>:8000/` или API:
+- **Сервис:** форма на `http://<server>:8010/` или API:
 ```bash
-curl -X POST http://<server>:8000/predict \
+curl -X POST http://<server>:8010/predict \
   -H "Content-Type: application/json" \
   -d '{"url":"https://auto.drom.ru/..."}'
 ```
@@ -117,10 +117,11 @@ docker compose logs -f superset
 ## ⚠️ Что ещё НАДО ДОДЕЛАТЬ (каркас, не готовый парсинг)
 
 1. **Парсер drom (`dags/drom_ingest.py` + `common/parsers.py::_fetch_drom`)** —
-   у drom анти-бот защита; CSS-селекторы карточек/полей помечены `TODO`.
-   Открой реальную страницу выдачи и карточку, подставь селекторы
-   (brand/model/year/price/mileage/region). Возможно понадобятся заголовки,
-   задержки, прокси.
+   селекторы рабочие (проверено реальным прогоном на сервере 2026-07-02 —
+   собрано 40 карточек, нормализовано 20 строк в `car_listings`). Открытый
+   риск — антибот drom при частом опросе (раз в 10 минут): нет ретраев,
+   задержек между запросами и ротации User-Agent. Если начнутся 403/капча —
+   добавить это в `scrape_drom()`.
 2. **Регион в telegram** — сейчас пусто; можно проставлять по гео канала или
    парсить из текста.
 3. **LLM для сложных телеграм-текстов** — заглушка в `normalize_telegram`
@@ -128,7 +129,7 @@ docker compose logs -f superset
    есть готовый агент в `../project/project` (DeepSeek).
 4. **Проверить обучение** — GradientBoosting взят по умолчанию; после набора
    данных посмотреть метрики, при желании поменять модель/фичи.
-5. **Прод-доступ** — сейчас порты 8080/8088/8000 открыты напрямую. Для «двух
+5. **Прод-доступ** — сейчас порты 8080/8088/8010 открыты напрямую. Для «двух
    точек входа наружу» поставить nginx перед Superset и `/predict`, остальное
    закрыть фаерволом.
 ```
