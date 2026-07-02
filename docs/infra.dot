@@ -1,0 +1,117 @@
+digraph infra {
+    rankdir=TB;
+    bgcolor="#1e1e2e";
+    fontname="Helvetica,Arial,sans-serif";
+    splines=polyline;
+    nodesep=0.45;
+    ranksep=0.55;
+    compound=true;
+
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=12, style="filled,rounded", penwidth=1.3];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, color="#8892b0", fontcolor="#c8d0e7", penwidth=1.1, arrowsize=0.7];
+
+    // ===================== внешний мир =====================
+    node [shape=box, style="filled,rounded", fillcolor="#2a2d3e", fontcolor="#e8eaf0", color="#4a4e69"];
+    user      [label="Пользователь\n(браузер)"];
+    admin     [label="Ты / друг\n(SSH-клиент)"];
+    drom_ext  [label="drom.ru"];
+    tg_ext    [label="Telegram"];
+    llm_ext   [label="LLM API\n(polza.ai)"];
+    vless_ext [label="VLESS-сервер\n(твоя VPN-подписка)"];
+    github_ext[label="GitHub\n(git pull)"];
+
+    // ===================== сервер =====================
+    subgraph cluster_server {
+        label="Сервер (Ubuntu 22.04 VPS, 1 публичный IP)";
+        fontsize=16; fontcolor="#e8eaf0";
+        style="rounded"; color="#555577"; bgcolor="#171826";
+        margin=20;
+
+        // ---------- docker network ----------
+        subgraph cluster_network {
+            label="docker network: drom-telegram_default (bridge, 172.18.0.0/16)";
+            fontsize=12; fontcolor="#aab4d4";
+            style="rounded,dashed"; color="#3a3d5c"; bgcolor="#1c1e2e";
+            margin=16;
+
+            node [fillcolor="#1f4a44", fontcolor="#e3f7f0", color="#2f8f7a"];
+            postgres [label="postgres:15\n172.18.0.2\nБД: cars + airflow + superset"];
+
+            node [fillcolor="#2c4a6e", fontcolor="#eaf2fb", color="#3f6ea5"];
+            airflow_init [label="airflow-init\n(разовый: migrate + create user,\nзавершается сразу)", shape=box, style="filled,rounded,dashed"];
+            airflow_web  [label="airflow-webserver\n172.18.0.5\nUI Airflow"];
+            airflow_sched[label="airflow-scheduler\n172.18.0.8\nзапускает таски DAG'ов"];
+
+            node [fillcolor="#6e4a1f", fontcolor="#fcefe0", color="#a8763f"];
+            superset [label="superset\n172.18.0.4\napache/superset:3.1.1"];
+
+            node [fillcolor="#1f6e4a", fontcolor="#e3fcef", color="#2fa870"];
+            prediction [label="prediction-api\n172.18.0.6\nFastAPI + uvicorn"];
+
+            node [fillcolor="#5a3a6e", fontcolor="#f5eafc", color="#8a5aa8"];
+            xray [label="xray\n172.18.0.3\nSOCKS5 :1080 (только внутри сети)"];
+
+            node [fillcolor="#4a4e69", fontcolor="#e8eaf0", color="#6a6e8f"];
+            nginx [label="nginx\n172.18.0.7\nреверс-прокси"];
+        }
+
+        // ---------- volumes ----------
+        subgraph cluster_volumes {
+            label="Тома / bind-mount'ы с диска сервера";
+            fontsize=12; fontcolor="#c9b38a";
+            style="rounded,dashed"; color="#6e5a3a"; bgcolor="#241f18";
+            margin=12;
+            node [shape=folder, fillcolor="#3a3226", fontcolor="#f0e6d0", color="#8a7550"];
+            vol_pgdata  [label="postgres_data\n(named volume)"];
+            vol_dags    [label="./dags"];
+            vol_common  [label="./common\n(общий код!)"];
+            vol_logs    [label="./logs"];
+            vol_model   [label="./model_store\n(price_model.joblib)"];
+            vol_tgsess  [label="./telegram_session"];
+            vol_sql     [label="./sql\n(init-скрипты)"];
+        }
+    }
+
+    // ===================== связи внутри docker-сети =====================
+    airflow_sched -> postgres [label="  метаданные airflow +\n  таблицы cars"];
+    airflow_web   -> postgres;
+    airflow_init  -> postgres [style=dashed];
+    superset      -> postgres [label="  метаданные superset +\n  читает car_listings"];
+    prediction    -> postgres [label="  читает car_listings\n  для обучения"];
+    nginx         -> superset [label="  proxy_pass :8088"];
+    nginx         -> prediction [label="  proxy_pass :8000"];
+    airflow_sched -> xray [label="  SOCKS5, если Telegram\n  заблокирован"];
+    prediction    -> xray [label="  SOCKS5 для /predict\n  по telegram-ссылке"];
+
+    // ===================== volume-монтирование (пунктир) =====================
+    edge [style=dashed, color="#6e5a3a", fontcolor="#c9b38a", arrowsize=0.6, penwidth=0.9];
+    postgres      -> vol_pgdata;
+    postgres      -> vol_sql;
+    airflow_web   -> vol_dags;
+    airflow_web   -> vol_common;
+    airflow_web   -> vol_logs;
+    airflow_web   -> vol_model;
+    airflow_web   -> vol_tgsess;
+    airflow_sched -> vol_dags;
+    airflow_sched -> vol_common;
+    airflow_sched -> vol_model;
+    airflow_sched -> vol_tgsess;
+    prediction    -> vol_common;
+    prediction    -> vol_model;
+    prediction    -> vol_tgsess;
+
+    // ===================== порты наружу / внутрь сервера =====================
+    edge [style=solid, color="#8892b0", fontcolor="#c8d0e7", arrowsize=0.7, penwidth=1.1];
+    user  -> nginx  [label="  :80 / :81\n  (публично, 0.0.0.0)", lhead=cluster_network];
+    admin -> airflow_web [label="  SSH-туннель →\n  127.0.0.1:8080", lhead=cluster_network];
+    admin -> postgres    [label="  SSH-туннель →\n  127.0.0.1:5432"];
+
+    // ===================== выход во внешний мир =====================
+    airflow_sched -> drom_ext  [label="  https:// (напрямую)"];
+    xray -> vless_ext [label="  VLESS+Reality :443"];
+    vless_ext -> tg_ext [label="  выходит в интернет\n  не из РФ-сегмента"];
+    airflow_sched -> llm_ext [label="  разбор telegram-постов"];
+    prediction -> llm_ext [label="  /predict по telegram-ссылке"];
+    prediction -> drom_ext [label="  /predict по drom-ссылке"];
+    github_ext -> admin [label="  git pull\n  (деплой кода)", dir=back];
+}
