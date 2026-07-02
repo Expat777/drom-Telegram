@@ -133,5 +133,17 @@ services:
       postgres:
         condition: service_healthy
 
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"   # точка входа 1: дашборд Superset
+      - "81:81"   # точка входа 2: сервис предсказания цены
+    restart: unless-stopped
+    depends_on:
+      - superset
+      - prediction-api
+
 volumes:
   postgres_data:
