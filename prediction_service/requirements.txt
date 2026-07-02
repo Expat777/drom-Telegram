@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 pydantic
 requests
+PySocks
 beautifulsoup4
 lxml
 scikit-learn

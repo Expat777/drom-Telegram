@@ -294,8 +294,10 @@ def _fetch_telegram_post(url: str) -> dict:
         return {"url": url, "text": ""}
     channel, msg_id = m.group(1), m.group(2)
     preview = f"https://t.me/s/{channel}/{msg_id}"
+    from common.config import telegram_proxy
     resp = requests.get(preview, timeout=20,
-                        headers={"User-Agent": "Mozilla/5.0"})
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        proxies=telegram_proxy())
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "lxml")
     node = soup.select_one(".tgme_widget_message_text")

@@ -14,6 +14,9 @@ telegram_session/
 *.session
 *.session-journal
 
+# xray-прокси (личная VPN-подписка, содержит секреты — не коммитим)
+xray/config.json
+
 # обученные модели (лежат в volume, не в git)
 model_store/*.joblib
 model_store/*.pkl

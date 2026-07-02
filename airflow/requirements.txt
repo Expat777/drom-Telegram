@@ -1,6 +1,7 @@
 # Зависимости нашего кода внутри Airflow-контейнера.
 # psycopg2 уже приезжает с provider-postgres.
 requests
+PySocks
 beautifulsoup4
 lxml
 telethon

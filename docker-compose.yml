@@ -27,6 +27,9 @@ x-airflow-common: &airflow-common
     TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
     TELEGRAM_CHANNELS: ${TELEGRAM_CHANNELS}
     TELEGRAM_SESSION: /opt/telegram_session/ingest
+    # опциональный SOCKS5-прокси для запросов к Telegram (если он заблокирован
+    # у хостера сервера, см. README): socks5h://xray:1080
+    TELEGRAM_PROXY: ${TELEGRAM_PROXY}
     MODEL_PATH: ${MODEL_PATH}
     LLM_API_KEY: ${LLM_API_KEY}
     LLM_BASE_URL: ${LLM_BASE_URL}
@@ -121,6 +124,7 @@ services:
     environment:
       CARS_DB_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       MODEL_PATH: ${MODEL_PATH}
+      TELEGRAM_PROXY: ${TELEGRAM_PROXY}
       PYTHONPATH: /app
     volumes:
       - ./common:/app/common
@@ -132,6 +136,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Опционально: SOCKS5-прокси для обхода блокировки Telegram у хостера сервера.
+  # Нужен, только если TELEGRAM_PROXY задан в .env — см. README и xray/config.json.example.
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    command: ["run", "-config", "/etc/xray/config.json"]
+    volumes:
+      - ./xray/config.json:/etc/xray/config.json:ro
+    restart: unless-stopped
 
   nginx:
     image: nginx:1.27-alpine

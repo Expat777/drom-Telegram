@@ -1,0 +1,42 @@
+{
+  "_comment": "Скопируй в config.json и заполни своими данными из VLESS-подписки (см. README раздел про TELEGRAM_PROXY). config.json в git не коммитим.",
+  "log": {"loglevel": "warning"},
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 1080,
+      "protocol": "socks",
+      "settings": {"auth": "noauth", "udp": true}
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "your-vless-server.example.com",
+            "port": 443,
+            "users": [
+              {
+                "id": "00000000-0000-0000-0000-000000000000",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "example.com",
+          "fingerprint": "firefox",
+          "publicKey": "your-reality-public-key",
+          "show": false
+        }
+      }
+    }
+  ]
+}

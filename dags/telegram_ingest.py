@@ -28,7 +28,7 @@ from sqlalchemy import text
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from common.config import telegram_channels, telegram_creds
+from common.config import telegram_channels, telegram_creds, telegram_proxy
 from common.db import connection
 
 # сколько последних сообщений тянуть с канала за один прогон (Telethon-режим)
@@ -76,7 +76,8 @@ async def _collect_telethon(channels: list[str]) -> list[dict]:
 def _fetch(url: str) -> str | None:
     for attempt in range(1, _WEB_RETRIES + 1):
         try:
-            resp = requests.get(url, timeout=25, headers=_WEB_HEADERS)
+            resp = requests.get(url, timeout=25, headers=_WEB_HEADERS,
+                                 proxies=telegram_proxy())
             if resp.status_code == 429 or resp.status_code >= 500:
                 raise requests.HTTPError(f"status {resp.status_code}")
             resp.raise_for_status()

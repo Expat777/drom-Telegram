@@ -56,7 +56,10 @@ docker compose ps
 ```
 
 ### 2. Telegram-сессия (сделать ДО первого прогона telegram_ingest)
-Telethon требует интерактивного логина — делаем локально, потом кладём файл на сервер:
+По умолчанию `telegram_ingest` работает БЕЗ Telethon — через публичное веб-превью
+`t.me/s/<канал>` (просто заполни `TELEGRAM_CHANNELS` в `.env`, `TELEGRAM_API_ID/HASH`
+оставь пустыми). Полноценный Telethon (полная история, приватные каналы) — опционально:
+
 ```bash
 # на локальной машине:
 pip install telethon
@@ -64,6 +67,18 @@ TELEGRAM_API_ID=... TELEGRAM_API_HASH=... python scripts/gen_telegram_session.py
 # получится telegram_session/ingest.session — скопировать на сервер:
 scp telegram_session/ingest.session deploy@<server>:~/car-price/project_drom_teleg/telegram_session/
 ```
+
+**Если у хостера сервера заблокирован Telegram** (проверить: `curl https://t.me` —
+если зависает/таймаутит при рабочем интернете в остальном, это оно): поднимается
+SOCKS5-прокси через сервис `xray` (VLESS+Reality). Нужен свой VLESS-конфиг (например,
+из подписки любого VPN-сервиса на этом протоколе):
+```bash
+cp xray/config.json.example xray/config.json
+# вписать address/port/id/publicKey/serverName из своей VLESS-подписки
+# в .env: TELEGRAM_PROXY=socks5h://xray:1080
+docker compose up -d xray
+```
+`xray/config.json` в git не коммитим (личные данные подписки).
 
 ### 3. Первый прогон DAG'ов (набрать датасет)
 Открыть Airflow `http://<server>:8080` (логин/пароль из `.env`), включить и запустить:

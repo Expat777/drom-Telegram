@@ -31,3 +31,16 @@ def llm_config() -> tuple[str | None, str | None, str]:
     base_url = os.environ.get("LLM_BASE_URL") or None
     model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
     return api_key, base_url, model
+
+
+def telegram_proxy() -> dict[str, str] | None:
+    """
+    dict для requests(proxies=...) или None, если прокси не настроен.
+    Нужен, если у хостера сервера заблокирован Telegram (см. .env.example,
+    сервис `xray` в docker-compose.yml). Пример значения:
+    socks5h://xray:1080
+    """
+    proxy = os.environ.get("TELEGRAM_PROXY") or None
+    if not proxy:
+        return None
+    return {"http": proxy, "https": proxy}
