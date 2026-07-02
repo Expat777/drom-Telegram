@@ -19,9 +19,9 @@ from common.db import fetch_df
 def train(**_):
     import joblib
     import numpy as np
-    from sklearn.compose import ColumnTransformer
+    from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
     from sklearn.ensemble import GradientBoostingRegressor
-    from sklearn.metrics import mean_absolute_error, mean_squared_error
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, median_absolute_error
     from sklearn.model_selection import train_test_split
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import OneHotEncoder
@@ -45,11 +45,16 @@ def train(**_):
     num = ["year", "mileage"]
 
     def make_pipeline():
+        # Цены разбросаны на 3 порядка — обучаем на log1p(цена), чтобы редкие
+        # дорогие машины не перетягивали на себя всю ошибку модели.
+        # TransformedTargetRegressor делает лог/обратный-лог прозрачно —
+        # predict() всё так же возвращает цену в рублях.
         pre = ColumnTransformer([
             ("cat", OneHotEncoder(handle_unknown="ignore"), cat),
             ("num", "passthrough", num),
         ])
-        return Pipeline([("pre", pre), ("model", GradientBoostingRegressor(random_state=42))])
+        inner = Pipeline([("pre", pre), ("model", GradientBoostingRegressor(random_state=42))])
+        return TransformedTargetRegressor(regressor=inner, func=np.log1p, inverse_func=np.expm1)
 
     # отложенная выборка только для оценки качества — финальная модель ниже
     # обучается уже на всех данных
@@ -58,10 +63,11 @@ def train(**_):
     eval_pipe.fit(X_train, y_train)
     pred = eval_pipe.predict(X_test)
     mae = mean_absolute_error(y_test, pred)
+    medae = median_absolute_error(y_test, pred)
     rmse = mean_squared_error(y_test, pred) ** 0.5
     mape = float(np.mean(np.abs((y_test - pred) / y_test))) * 100
     print(f"[train] метрики на отложенной выборке ({len(X_test)} строк): "
-          f"MAE={mae:,.0f} руб, RMSE={rmse:,.0f} руб, MAPE={mape:.1f}%")
+          f"MAE={mae:,.0f} руб, MedAE={medae:,.0f} руб, RMSE={rmse:,.0f} руб, MAPE={mape:.1f}%")
 
     pipe = make_pipeline()
     pipe.fit(X, y)
