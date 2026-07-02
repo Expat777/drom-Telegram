@@ -58,7 +58,9 @@ services:
       # init-скрипты создают доп. БД (airflow, superset) и таблицы приложения
       - ./sql:/docker-entrypoint-initdb.d
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # только localhost — снаружи не пускаем, для доступа с рабочей машины
+      # используйте SSH-туннель: ssh -L 5432:localhost:5432 <server>
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
       interval: 5s
@@ -81,7 +83,9 @@ services:
     <<: *airflow-common
     command: webserver
     ports:
-      - "8080:8080"
+      # только localhost — снаружи не пускаем, точки входа наружу — только
+      # через nginx (:80/:81). Доступ: ssh -L 8080:localhost:8080 <server>
+      - "127.0.0.1:8080:8080"
     restart: unless-stopped
     depends_on:
       airflow-init:
@@ -111,7 +115,8 @@ services:
       - ./superset/superset_config.py:/app/superset_config.py
       - ./superset/init.sh:/app/init.sh
     ports:
-      - "8088:8088"
+      # снаружи Superset доступен через nginx (:80), это — запасной localhost-доступ
+      - "127.0.0.1:8088:8088"
     command: ["/bin/bash", "/app/init.sh"]
     restart: unless-stopped
     depends_on:
@@ -131,7 +136,8 @@ services:
       - ./model_store:/opt/model_store
       - ./telegram_session:/opt/telegram_session
     ports:
-      - "${PREDICTION_PORT:-8010}:8000"
+      # снаружи сервис доступен через nginx (:81), это — запасной localhost-доступ
+      - "127.0.0.1:${PREDICTION_PORT:-8010}:8000"
     restart: unless-stopped
     depends_on:
       postgres:
