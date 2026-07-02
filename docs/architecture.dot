@@ -1,0 +1,64 @@
+digraph architecture {
+    rankdir=TB;
+    bgcolor="#1e1e2e";
+    fontname="Helvetica,Arial,sans-serif";
+    splines=polyline;
+    nodesep=0.55;
+    ranksep=0.65;
+
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=13, style="filled,rounded", penwidth=1.4];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=11, color="#8892b0", fontcolor="#c8d0e7", penwidth=1.3, arrowsize=0.8];
+
+    // sources
+    node [shape=box, style="filled,rounded", fillcolor="#2a2d3e", fontcolor="#e8eaf0", color="#4a4e69"];
+    drom   [label="drom.ru"];
+    tg     [label="Telegram\n(публичные каналы)"];
+
+    // ingest DAGs
+    node [fillcolor="#2c4a6e", fontcolor="#eaf2fb", color="#3f6ea5"];
+    drom_ingest [label="drom_ingest\nDAG · каждые 10 мин"];
+    tg_ingest   [label="telegram_ingest\nDAG · каждые 10 мин\n(через прокси, если блок)"];
+
+    // raw tables
+    node [shape=cylinder, fillcolor="#1f4a44", fontcolor="#e3f7f0", color="#2f8f7a", height=0.9];
+    drom_raw [label="drom_raw\n(Postgres, сырой JSON)"];
+    tg_raw   [label="telegram_raw\n(Postgres, сырой текст)"];
+
+    // normalize DAG
+    node [shape=box, style="filled,rounded", fillcolor="#5a3a6e", fontcolor="#f5eafc", color="#8a5aa8"];
+    normalize [label="normalize_car_listings\nDAG · каждые 15 мин\nregex (drom) / LLM (telegram)"];
+
+    // unified table
+    node [shape=cylinder, fillcolor="#1f4a44", fontcolor="#e3f7f0", color="#2f8f7a", height=0.9];
+    car_listings [label="car_listings\n(Postgres — общая таблица)"];
+
+    // consumers
+    node [shape=box, style="filled,rounded", fillcolor="#6e4a1f", fontcolor="#fcefe0", color="#a8763f"];
+    superset [label="Superset\nдашборд (6 чартов)"];
+    train    [label="train_price_model\nDAG · раз в неделю\nGradientBoosting на log(цена)"];
+
+    node [shape=note, fillcolor="#3a3a3a", fontcolor="#f0f0f0", color="#777"];
+    model [label="price_model.joblib\n(общий volume)"];
+
+    node [shape=box, style="filled,rounded", fillcolor="#1f6e4a", fontcolor="#e3fcef", color="#2fa870"];
+    predict [label="prediction-api (FastAPI)\nPOST /predict\nпарсит ссылку тем же кодом,\nчто и normalize_car_listings"];
+
+    node [shape=box, style="filled,rounded", fillcolor="#2a2d3e", fontcolor="#e8eaf0", color="#4a4e69"];
+    user [label="Пользователь:\nссылка на объявление"];
+    result [label="предсказанная цена +\nсравнение с реальной"];
+
+    // edges
+    drom -> drom_ingest;
+    tg -> tg_ingest;
+    drom_ingest -> drom_raw;
+    tg_ingest -> tg_raw;
+    drom_raw -> normalize;
+    tg_raw -> normalize;
+    normalize -> car_listings;
+    car_listings -> superset;
+    car_listings -> train;
+    train -> model;
+    model -> predict;
+    user -> predict;
+    predict -> result;
+}
