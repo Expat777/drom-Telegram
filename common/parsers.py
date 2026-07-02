@@ -98,15 +98,24 @@ def extract_price(text: str) -> float | None:
     """
     t = text.lower().replace(" ", " ")
 
-    # 1.2 млн / 1,2 миллиона
-    m = re.search(r"(\d+[.,]?\d*)\s*(?:млн|миллион)", t)
+    def _bounded(val: float) -> float | None:
+        return val if 30_000 <= val <= 100_000_000 else None
+
+    # 1.2 млн / 1,2 миллиона. Десятичный разделитель принимаем только если
+    # за ним следует цифра — иначе "д. 6, к. 3" (адрес) тоже матчится: "6,"
+    # распознаётся как число с висящей запятой перед случайным "млн"/"к".
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:млн|миллион)", t)
     if m:
-        return float(m.group(1).replace(",", ".")) * 1_000_000
+        val = _bounded(float(m.group(1).replace(",", ".")) * 1_000_000)
+        if val is not None:
+            return val
 
     # 950 тыс / 950 т.р. / 950 к
-    m = re.search(r"(\d+[.,]?\d*)\s*(?:тыс|т\.?\s*р|к\b)", t)
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:тыс|т\.?\s*р|к\b)", t)
     if m:
-        return float(m.group(1).replace(",", ".")) * 1_000
+        val = _bounded(float(m.group(1).replace(",", ".")) * 1_000)
+        if val is not None:
+            return val
 
     # обычное число рядом со словом цена/руб/₽ или просто крупное число
     candidates = re.findall(r"(\d[\d\s]{4,})\s*(?:руб|₽|р\.)", t)
@@ -115,8 +124,8 @@ def extract_price(text: str) -> float | None:
         if m:
             candidates = [m.group(1)]
     for c in candidates:
-        val = float(re.sub(r"\s", "", c))
-        if 30_000 <= val <= 100_000_000:
+        val = _bounded(float(re.sub(r"\s", "", c)))
+        if val is not None:
             return val
     return None
 
