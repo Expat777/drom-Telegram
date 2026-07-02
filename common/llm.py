@@ -54,12 +54,23 @@ def _coerce(data: dict) -> dict:
 
 
 def _extract_json(content: str) -> dict:
-    """Достаём JSON-объект из ответа модели (на случай обёртки в текст/```)."""
+    """
+    Достаём JSON-объект из ответа модели (на случай обёртки в текст/```).
+    Модель иногда оборачивает ответ в список из одного объекта — берём первый.
+    """
     try:
-        return json.loads(content)
+        data = json.loads(content)
     except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", content, flags=re.DOTALL)
-        return json.loads(m.group(0)) if m else {}
+        m = re.search(r"[\{\[].*[\}\]]", content, flags=re.DOTALL)
+        if not m:
+            return {}
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return {}
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    return data if isinstance(data, dict) else {}
 
 
 def parse_with_llm(text: str) -> dict:
