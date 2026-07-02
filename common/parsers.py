@@ -261,7 +261,14 @@ _DROM_HEADERS = {
 def _fetch_drom(url: str) -> dict:
     """
     Скачивает страницу объявления drom.ru и вытаскивает поля.
-    Марку/модель/город берём из URL, год/цену/пробег — из текста страницы.
+    Марку/модель/город берём из URL, год — из заголовка/текста.
+
+    Цену и пробег берём из структурных полей самой карточки объявления
+    ([data-ftid="bulletin-price"] / [data-ftid="specification-mileage"]), а
+    НЕ регуляркой по всему тексту страницы — там попадаются посторонние цифры
+    (например, цены в блоке "похожие запчасти"), которые перебивают реальную
+    цену авто.
+
     Важно: страницы в windows-1251.
     """
     resp = requests.get(url, timeout=25, headers=_DROM_HEADERS)
@@ -273,14 +280,21 @@ def _fetch_drom(url: str) -> dict:
     city, brand, model = drom_url_parts(url)
     h1 = soup.find("h1")
     title = h1.get_text(" ", strip=True) if h1 else page_text[:120]
+
+    price_el = soup.select_one('[data-ftid="bulletin-price"]')
+    price = extract_price(price_el.get_text(" ", strip=True)) if price_el else None
+
+    mileage_el = soup.select_one('[data-ftid="specification-mileage"]')
+    mileage = extract_mileage(mileage_el.get_text(" ", strip=True)) if mileage_el else None
+
     return {
         "url": url,
         "brand": _slug_to_name(brand),
         "model": _slug_to_name(model),
         "region": _slug_to_name(city),
         "year": extract_year(title) or extract_year(page_text),
-        "price": extract_price(page_text),
-        "mileage": extract_mileage(page_text),
+        "price": price if price is not None else extract_price(page_text),
+        "mileage": mileage if mileage is not None else extract_mileage(page_text),
     }
 
 
