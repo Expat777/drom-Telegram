@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic
+requests
+beautifulsoup4
+lxml
+scikit-learn
+joblib
+pandas
+SQLAlchemy>=2.0
+psycopg2-binary

@@ -1,0 +1,276 @@
+"""
+Общий парсер для обоих источников.
+
+Этот модуль импортируют И DAG нормализации (шаг 2), И сервис предсказания
+(шаг 4) — так выполняется требование "сервис парсит ссылку тем же кодом".
+
+Функции верхнего уровня:
+  - normalize_drom(raw)      -> dict  единого вида
+  - normalize_telegram(raw)  -> dict  единого вида
+  - parse_listing_url(url)   -> dict  (для сервиса предсказания)
+
+Единый вид (unified dict):
+  brand, model, year, price, mileage, region, source, url, collected_at
+"""
+from __future__ import annotations
+
+import re
+from datetime import datetime, timezone
+
+import requests
+from bs4 import BeautifulSoup
+
+# ----------------------------------------------------------------------
+# Список марок для распознавания в свободном тексте (телеграм).
+# Дополняй по мере необходимости.
+# ----------------------------------------------------------------------
+BRANDS = [
+    "Toyota", "Honda", "Nissan", "Mazda", "Mitsubishi", "Subaru", "Suzuki",
+    "Lexus", "Hyundai", "Kia", "Volkswagen", "Audi", "BMW", "Mercedes",
+    "Mercedes-Benz", "Skoda", "Renault", "Ford", "Chevrolet", "Opel",
+    "Lada", "ВАЗ", "Geely", "Chery", "Haval", "Changan", "Volvo", "Peugeot",
+    "Citroen", "Land Rover", "Porsche", "Infiniti", "Datsun", "UAZ", "УАЗ",
+]
+
+_UNIFIED_KEYS = ("brand", "model", "year", "price", "mileage",
+                 "region", "source", "url", "collected_at")
+
+
+# ----------------------------------------------------------------------
+# Низкоуровневые извлекалки из текста (общие для drom и telegram)
+# ----------------------------------------------------------------------
+def extract_year(text: str) -> int | None:
+    """Год выпуска: 4 цифры в диапазоне 1950..текущий+1."""
+    now = datetime.now().year
+    for m in re.finditer(r"\b(19[5-9]\d|20[0-4]\d)\b", text):
+        y = int(m.group(1))
+        if 1950 <= y <= now + 1:
+            return y
+    return None
+
+
+def extract_price(text: str) -> float | None:
+    """
+    Цена в рублях. Понимает '1 200 000', '1200000 руб', '1.2 млн', '950 т.р.'.
+    """
+    t = text.lower().replace(" ", " ")
+
+    # 1.2 млн / 1,2 миллиона
+    m = re.search(r"(\d+[.,]?\d*)\s*(?:млн|миллион)", t)
+    if m:
+        return float(m.group(1).replace(",", ".")) * 1_000_000
+
+    # 950 тыс / 950 т.р. / 950 к
+    m = re.search(r"(\d+[.,]?\d*)\s*(?:тыс|т\.?\s*р|к\b)", t)
+    if m:
+        return float(m.group(1).replace(",", ".")) * 1_000
+
+    # обычное число рядом со словом цена/руб/₽ или просто крупное число
+    candidates = re.findall(r"(\d[\d\s]{4,})\s*(?:руб|₽|р\.)", t)
+    if not candidates:
+        m = re.search(r"цена[:\s]*([\d\s]{5,})", t)
+        if m:
+            candidates = [m.group(1)]
+    for c in candidates:
+        val = float(re.sub(r"\s", "", c))
+        if 30_000 <= val <= 100_000_000:
+            return val
+    return None
+
+
+def extract_mileage(text: str) -> float | None:
+    """Пробег в км: 'пробег 120 000', '120000 км', '120 тыс км'."""
+    t = text.lower().replace(" ", " ")
+
+    m = re.search(r"пробег[:\s]*([\d\s]{2,})\s*(?:тыс)?\s*км?", t)
+    if not m:
+        m = re.search(r"([\d\s]{3,})\s*км\b", t)
+    if not m:
+        m = re.search(r"([\d\s]{2,})\s*тыс\.?\s*км", t)
+    if m:
+        val = float(re.sub(r"\s", "", m.group(1)))
+        if "тыс" in t[m.start():m.end() + 6] and val < 1000:
+            val *= 1000
+        if 0 < val <= 1_000_000:
+            return val
+    return None
+
+
+def extract_brand_model(text: str) -> tuple[str | None, str | None]:
+    """Ищем марку из списка BRANDS, модель — слово после марки."""
+    for brand in sorted(BRANDS, key=len, reverse=True):
+        m = re.search(rf"\b{re.escape(brand)}\b\s*([A-Za-zА-Яа-я0-9\-]+)?",
+                      text, flags=re.IGNORECASE)
+        if m:
+            model = m.group(1)
+            # отсекаем мусорные "модели"
+            if model and model.lower() in {"года", "год", "за", "в", "с"}:
+                model = None
+            return brand, model
+    return None, None
+
+
+# ----------------------------------------------------------------------
+# Нормализация raw-строк из БД в единый вид
+# ----------------------------------------------------------------------
+def _empty_unified(source: str, url: str | None) -> dict:
+    return {
+        "brand": None, "model": None, "year": None, "price": None,
+        "mileage": None, "region": None, "source": source, "url": url,
+        "collected_at": datetime.now(timezone.utc),
+    }
+
+
+def drom_url_parts(url: str | None) -> tuple[str | None, str | None, str | None]:
+    """Из URL drom достаём (city, brand, model): .../<city>/<brand>/<model>/<id>.html"""
+    if not url:
+        return None, None, None
+    m = re.search(r"drom\.ru/([^/]+)/([^/]+)/([^/]+)/\d+\.html", url)
+    if not m:
+        return None, None, None
+    city, brand, model = m.groups()
+    return city, brand, model
+
+
+def _slug_to_name(slug: str | None) -> str | None:
+    if not slug:
+        return None
+    return slug.replace("_", " ").replace("-", " ").title()
+
+
+def normalize_drom(raw: dict) -> dict:
+    """
+    raw — то, что drom_ingest положил в drom_raw.raw:
+    {url, title '<Марка> <Модель>, <год>', price_text, desc_items[...]}.
+    Марку/модель/город берём из URL (латиница, надёжнее), остальное — из карточки.
+    """
+    url = raw.get("url")
+    out = _empty_unified("drom", url)
+    city, brand, model = drom_url_parts(url)
+    out["brand"] = _slug_to_name(brand) or raw.get("brand")
+    out["model"] = _slug_to_name(model) or raw.get("model")
+    out["region"] = _slug_to_name(city) or raw.get("region")
+
+    title = raw.get("title") or ""
+    out["year"] = _to_int(raw.get("year")) or extract_year(title)
+
+    # цена: из числа, либо из price_text ("1 195 000" — заведомо цена, парсим цифры)
+    price = _to_float(raw.get("price"))
+    if price is None and raw.get("price_text"):
+        digits = re.sub(r"[^\d]", "", raw["price_text"])
+        price = float(digits) if digits else None
+    out["price"] = price
+
+    # пробег — среди desc_items ищем элемент с "км"
+    mileage = raw.get("mileage")
+    if mileage is None:
+        for item in raw.get("desc_items") or []:
+            if "км" in item.lower():
+                mileage = extract_mileage(item)
+                break
+    out["mileage"] = _to_float(mileage)
+    return out
+
+
+def normalize_telegram(raw: dict) -> dict:
+    """
+    raw — строка из telegram_raw (нужны поля 'text', 'url', 'channel').
+    Тащим поля из свободного текста регулярками. Если regex не справился и
+    настроен LLM — добираем LLM-ом (см. TODO ниже).
+    """
+    text = raw.get("text") or ""
+    out = _empty_unified("telegram", raw.get("url"))
+    out["region"] = raw.get("region")  # часто = гео канала; можно доработать
+    brand, model = extract_brand_model(text)
+    out["brand"] = brand
+    out["model"] = model
+    out["year"] = extract_year(text)
+    out["price"] = extract_price(text)
+    out["mileage"] = extract_mileage(text)
+
+    # TODO(LLM): если ключевые поля пустые, а LLM_API_KEY задан — распарсить LLM-ом.
+    # from common.llm import parse_with_llm
+    # if out["price"] is None or out["brand"] is None:
+    #     out.update(parse_with_llm(text))
+    return out
+
+
+# ----------------------------------------------------------------------
+# Для сервиса предсказания: по ссылке вернуть признаки
+# ----------------------------------------------------------------------
+def parse_listing_url(url: str) -> dict:
+    """
+    Определяет источник по URL, скачивает страницу/пост и возвращает единый dict.
+    Используется ТЕМ ЖЕ кодом, что и нормализация (см. README, шаг 4).
+    """
+    if "drom.ru" in url:
+        return normalize_drom(_fetch_drom(url))
+    if "t.me" in url or "telegram" in url:
+        return normalize_telegram(_fetch_telegram_post(url))
+    raise ValueError(f"Неизвестный источник ссылки: {url}")
+
+
+_DROM_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+}
+
+
+def _fetch_drom(url: str) -> dict:
+    """
+    Скачивает страницу объявления drom.ru и вытаскивает поля.
+    Марку/модель/город берём из URL, год/цену/пробег — из текста страницы.
+    Важно: страницы в windows-1251.
+    """
+    resp = requests.get(url, timeout=25, headers=_DROM_HEADERS)
+    resp.raise_for_status()
+    resp.encoding = "windows-1251"
+    soup = BeautifulSoup(resp.text, "html.parser")
+    page_text = soup.get_text(" ", strip=True)
+
+    city, brand, model = drom_url_parts(url)
+    h1 = soup.find("h1")
+    title = h1.get_text(" ", strip=True) if h1 else page_text[:120]
+    return {
+        "url": url,
+        "brand": _slug_to_name(brand),
+        "model": _slug_to_name(model),
+        "region": _slug_to_name(city),
+        "year": extract_year(title) or extract_year(page_text),
+        "price": extract_price(page_text),
+        "mileage": extract_mileage(page_text),
+    }
+
+
+def _fetch_telegram_post(url: str) -> dict:
+    """
+    Одиночный пост t.me/<channel>/<id>. Публичные посты доступны как
+    веб-превью t.me/s/<channel>/<id> без авторизации.
+    """
+    m = re.search(r"t\.me/(?:s/)?([^/]+)/(\d+)", url)
+    if not m:
+        return {"url": url, "text": ""}
+    channel, msg_id = m.group(1), m.group(2)
+    preview = f"https://t.me/s/{channel}/{msg_id}"
+    resp = requests.get(preview, timeout=20,
+                        headers={"User-Agent": "Mozilla/5.0"})
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+    node = soup.select_one(".tgme_widget_message_text")
+    return {"url": url, "channel": channel,
+            "text": node.get_text(" ", strip=True) if node else ""}
+
+
+# ----------------------------------------------------------------------
+def _to_int(v):
+    try:
+        return int(float(str(v).replace(" ", "").replace(" ", "")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(v):
+    try:
+        return float(re.sub(r"[^\d.]", "", str(v).replace(",", ".")))
+    except (TypeError, ValueError):
+        return None

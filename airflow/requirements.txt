@@ -1,0 +1,10 @@
+# Зависимости нашего кода внутри Airflow-контейнера.
+# psycopg2 уже приезжает с provider-postgres.
+requests
+beautifulsoup4
+lxml
+telethon
+pandas
+scikit-learn
+joblib
+SQLAlchemy>=1.4,<2.0

@@ -1,0 +1,137 @@
+# ============================================================
+# Весь стек одним файлом:
+#   postgres        - общая БД (метаданные airflow + данные приложения)
+#   airflow (init/webserver/scheduler, LocalExecutor)
+#   superset (init/app)
+#   prediction-api  - FastAPI: ссылка -> предсказанная цена
+#
+# Запуск:  cp .env.example .env  (заполнить) ->  docker compose up -d
+# ============================================================
+
+x-airflow-common: &airflow-common
+  build: ./airflow
+  env_file: .env
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+    # чтобы работал `import common.*` из dags и сервисов
+    PYTHONPATH: /opt/airflow
+    # DSN для нашего кода (данные приложения лежат в БД cars)
+    CARS_DB_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+    TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+    TELEGRAM_CHANNELS: ${TELEGRAM_CHANNELS}
+    TELEGRAM_SESSION: /opt/telegram_session/ingest
+    MODEL_PATH: ${MODEL_PATH}
+    LLM_API_KEY: ${LLM_API_KEY}
+    LLM_BASE_URL: ${LLM_BASE_URL}
+    LLM_MODEL: ${LLM_MODEL}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./common:/opt/airflow/common
+    - ./logs:/opt/airflow/logs
+    - ./model_store:/opt/model_store
+    - ./telegram_session:/opt/telegram_session
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # init-скрипты создают доп. БД (airflow, superset) и таблицы приложения
+      - ./sql:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    command:
+      - bash
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER}" --password "${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname admin --lastname admin --role Admin --email admin@example.com || true
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  superset:
+    image: apache/superset:3.1.1
+    env_file: .env
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_CONFIG_PATH: /app/superset_config.py
+      ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+    volumes:
+      - ./superset/superset_config.py:/app/superset_config.py
+      - ./superset/init.sh:/app/init.sh
+    ports:
+      - "8088:8088"
+    command: ["/bin/bash", "/app/init.sh"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  prediction-api:
+    build: ./prediction_service
+    env_file: .env
+    environment:
+      CARS_DB_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MODEL_PATH: ${MODEL_PATH}
+      PYTHONPATH: /app
+    volumes:
+      - ./common:/app/common
+      - ./model_store:/opt/model_store
+      - ./telegram_session:/opt/telegram_session
+    ports:
+      - "${PREDICTION_PORT:-8010}:8000"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
