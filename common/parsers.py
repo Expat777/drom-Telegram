@@ -35,6 +35,31 @@ BRANDS = [
 _UNIFIED_KEYS = ("brand", "model", "year", "price", "mileage",
                  "region", "source", "url", "collected_at")
 
+# Крупные города/регионы для распознавания в свободном тексте (телеграм).
+# Ключ — каноничное имя в БД, значения — варианты написания/склонения в тексте.
+REGIONS = {
+    "Москва": ["москва", "москве", "мск"],
+    "Санкт-Петербург": ["санкт-петербург", "спб", "питер", "петербург"],
+    "Новосибирск": ["новосибирск"],
+    "Екатеринбург": ["екатеринбург", "екб"],
+    "Казань": ["казань", "казани"],
+    "Нижний Новгород": ["нижний новгород", "нижнем новгороде", "нижнем"],
+    "Челябинск": ["челябинск"],
+    "Самара": ["самара", "самаре"],
+    "Омск": ["омск", "омске"],
+    "Ростов-на-Дону": ["ростов-на-дону", "ростов", "ростове"],
+    "Уфа": ["уфа", "уфе"],
+    "Красноярск": ["красноярск", "красноярске"],
+    "Воронеж": ["воронеж", "воронеже"],
+    "Пермь": ["пермь", "перми"],
+    "Волгоград": ["волгоград", "волгограде"],
+    "Краснодар": ["краснодар", "краснодаре"],
+    "Владивосток": ["владивосток", "владивостоке", "владик"],
+    "Хабаровск": ["хабаровск", "хабаровске"],
+    "Иркутск": ["иркутск", "иркутске"],
+    "Тюмень": ["тюмень", "тюмени"],
+}
+
 
 # ----------------------------------------------------------------------
 # Низкоуровневые извлекалки из текста (общие для drom и telegram)
@@ -93,6 +118,16 @@ def extract_mileage(text: str) -> float | None:
             val *= 1000
         if 0 < val <= 1_000_000:
             return val
+    return None
+
+
+def extract_region(text: str) -> str | None:
+    """Ищем известный город/регион в свободном тексте объявления."""
+    t = text.lower()
+    for canonical, variants in REGIONS.items():
+        for v in variants:
+            if re.search(rf"\b{re.escape(v)}\b", t):
+                return canonical
     return None
 
 
@@ -180,18 +215,25 @@ def normalize_telegram(raw: dict) -> dict:
     """
     text = raw.get("text") or ""
     out = _empty_unified("telegram", raw.get("url"))
-    out["region"] = raw.get("region")  # часто = гео канала; можно доработать
     brand, model = extract_brand_model(text)
     out["brand"] = brand
     out["model"] = model
     out["year"] = extract_year(text)
     out["price"] = extract_price(text)
     out["mileage"] = extract_mileage(text)
+    # регион: сперва из текста, иначе — гео из raw (если проставлено выше)
+    out["region"] = extract_region(text) or raw.get("region")
 
-    # TODO(LLM): если ключевые поля пустые, а LLM_API_KEY задан — распарсить LLM-ом.
-    # from common.llm import parse_with_llm
-    # if out["price"] is None or out["brand"] is None:
-    #     out.update(parse_with_llm(text))
+    # LLM-фолбэк: если regex не вытащил ключевые поля, а LLM настроен —
+    # добираем модель-ом. parse_with_llm сам возвращает {} при выключенном LLM
+    # или любой ошибке, поэтому это безопасно и не роняет нормализацию.
+    if out["price"] is None or out["brand"] is None:
+        from common.llm import parse_with_llm
+
+        llm = parse_with_llm(text)
+        for k, v in llm.items():
+            if k in _UNIFIED_KEYS and out.get(k) is None and v is not None:
+                out[k] = v
     return out
 
 
