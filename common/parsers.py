@@ -35,6 +35,24 @@ BRANDS = [
 _UNIFIED_KEYS = ("brand", "model", "year", "price", "mileage",
                  "region", "source", "url", "collected_at")
 
+# Сокращения/кириллические написания марок -> каноничное имя из BRANDS.
+# Без этого "VW" и "Volkswagen" были бы разными значениями в дашборде.
+BRAND_ALIASES = {
+    "vw": "Volkswagen",
+    "фольксваген": "Volkswagen",
+    "мерседес": "Mercedes-Benz",
+    "мерс": "Mercedes-Benz",
+    "бмв": "BMW",
+    "тойота": "Toyota",
+    "ниссан": "Nissan",
+    "хендай": "Hyundai",
+    "хёндай": "Hyundai",
+    "киа": "Kia",
+    "шкода": "Skoda",
+    "лада": "Lada",
+    "рено": "Renault",
+}
+
 # Крупные города/регионы для распознавания в свободном тексте (телеграм).
 # Ключ — каноничное имя в БД, значения — варианты написания/склонения в тексте.
 REGIONS = {
@@ -132,16 +150,19 @@ def extract_region(text: str) -> str | None:
 
 
 def extract_brand_model(text: str) -> tuple[str | None, str | None]:
-    """Ищем марку из списка BRANDS, модель — слово после марки."""
-    for brand in sorted(BRANDS, key=len, reverse=True):
-        m = re.search(rf"\b{re.escape(brand)}\b\s*([A-Za-zА-Яа-я0-9\-]+)?",
+    """Ищем марку из BRANDS или алиасов (VW->Volkswagen), модель — слово после."""
+    # (искомый_термин, каноничная_марка); длинные термины проверяем первыми,
+    # чтобы "Mercedes-Benz" сматчился раньше "мерс".
+    terms = [(b, b) for b in BRANDS] + list(BRAND_ALIASES.items())
+    for term, canonical in sorted(terms, key=lambda p: len(p[0]), reverse=True):
+        m = re.search(rf"\b{re.escape(term)}\b\s*([A-Za-zА-Яа-я0-9\-]+)?",
                       text, flags=re.IGNORECASE)
         if m:
             model = m.group(1)
             # отсекаем мусорные "модели"
             if model and model.lower() in {"года", "год", "за", "в", "с"}:
                 model = None
-            return brand, model
+            return canonical, model
     return None, None
 
 
@@ -173,6 +194,40 @@ def _slug_to_name(slug: str | None) -> str | None:
     return slug.replace("_", " ").replace("-", " ").title()
 
 
+# Латинские slug'и городов из URL drom -> те же русские названия, что и в REGIONS
+# (иначе регион drom "Moscow" и telegram "Москва" — разные значения в дашборде).
+DROM_CITY_TO_REGION = {
+    "moscow": "Москва",
+    "spb": "Санкт-Петербург",
+    "sankt-peterburg": "Санкт-Петербург",
+    "novosibirsk": "Новосибирск",
+    "ekaterinburg": "Екатеринбург",
+    "kazan": "Казань",
+    "nizhny_novgorod": "Нижний Новгород",
+    "chelyabinsk": "Челябинск",
+    "samara": "Самара",
+    "omsk": "Омск",
+    "rostov-na-donu": "Ростов-на-Дону",
+    "ufa": "Уфа",
+    "krasnoyarsk": "Красноярск",
+    "voronezh": "Воронеж",
+    "perm": "Пермь",
+    "volgograd": "Волгоград",
+    "krasnodar": "Краснодар",
+    "vladivostok": "Владивосток",
+    "khabarovsk": "Хабаровск",
+    "irkutsk": "Иркутск",
+    "tyumen": "Тюмень",
+}
+
+
+def _drom_region(city_slug: str | None) -> str | None:
+    """Русское название региона по slug'у из URL drom; иначе — из slug'а как есть."""
+    if not city_slug:
+        return None
+    return DROM_CITY_TO_REGION.get(city_slug.lower()) or _slug_to_name(city_slug)
+
+
 def normalize_drom(raw: dict) -> dict:
     """
     raw — то, что drom_ingest положил в drom_raw.raw:
@@ -184,7 +239,7 @@ def normalize_drom(raw: dict) -> dict:
     city, brand, model = drom_url_parts(url)
     out["brand"] = _slug_to_name(brand) or raw.get("brand")
     out["model"] = _slug_to_name(model) or raw.get("model")
-    out["region"] = _slug_to_name(city) or raw.get("region")
+    out["region"] = _drom_region(city) or raw.get("region")
 
     title = raw.get("title") or ""
     out["year"] = _to_int(raw.get("year")) or extract_year(title)
