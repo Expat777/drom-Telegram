@@ -173,6 +173,40 @@ def _slug_to_name(slug: str | None) -> str | None:
     return slug.replace("_", " ").replace("-", " ").title()
 
 
+# Латинские slug'и городов из URL drom -> те же русские названия, что и в REGIONS
+# (иначе регион drom "Moscow" и telegram "Москва" — разные значения в дашборде).
+DROM_CITY_TO_REGION = {
+    "moscow": "Москва",
+    "spb": "Санкт-Петербург",
+    "sankt-peterburg": "Санкт-Петербург",
+    "novosibirsk": "Новосибирск",
+    "ekaterinburg": "Екатеринбург",
+    "kazan": "Казань",
+    "nizhny_novgorod": "Нижний Новгород",
+    "chelyabinsk": "Челябинск",
+    "samara": "Самара",
+    "omsk": "Омск",
+    "rostov-na-donu": "Ростов-на-Дону",
+    "ufa": "Уфа",
+    "krasnoyarsk": "Красноярск",
+    "voronezh": "Воронеж",
+    "perm": "Пермь",
+    "volgograd": "Волгоград",
+    "krasnodar": "Краснодар",
+    "vladivostok": "Владивосток",
+    "khabarovsk": "Хабаровск",
+    "irkutsk": "Иркутск",
+    "tyumen": "Тюмень",
+}
+
+
+def _drom_region(city_slug: str | None) -> str | None:
+    """Русское название региона по slug'у из URL drom; иначе — из slug'а как есть."""
+    if not city_slug:
+        return None
+    return DROM_CITY_TO_REGION.get(city_slug.lower()) or _slug_to_name(city_slug)
+
+
 def normalize_drom(raw: dict) -> dict:
     """
     raw — то, что drom_ingest положил в drom_raw.raw:
@@ -184,7 +218,7 @@ def normalize_drom(raw: dict) -> dict:
     city, brand, model = drom_url_parts(url)
     out["brand"] = _slug_to_name(brand) or raw.get("brand")
     out["model"] = _slug_to_name(model) or raw.get("model")
-    out["region"] = _slug_to_name(city) or raw.get("region")
+    out["region"] = _drom_region(city) or raw.get("region")
 
     title = raw.get("title") or ""
     out["year"] = _to_int(raw.get("year")) or extract_year(title)

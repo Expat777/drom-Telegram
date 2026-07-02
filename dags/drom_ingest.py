@@ -24,9 +24,19 @@ from airflow.operators.python import PythonOperator
 
 from common.db import connection
 
-# базовые страницы выдачи; PAGES — сколько страниц пагинации обходить
-DROM_LIST_URLS = ["https://auto.drom.ru/all/"]
-PAGES = 3
+# Охват: обходим несколько городов, а не одну общую ленту /all/.
+# У drom пагинация PATH-ОВАЯ: /all/ -> page1, /all/page2/ -> page2 и т.д.
+# (частая ошибка — ?page=N; он отдаёт ту же первую страницу, охвата не даёт).
+DROM_CITIES = [
+    "moscow", "spb", "novosibirsk", "ekaterinburg",
+    "vladivostok", "krasnodar", "kazan", "rostov-na-donu",
+]
+PAGES = 3   # страниц пагинации на каждый город
+
+
+def _page_url(city: str, page: int) -> str:
+    base = f"https://auto.drom.ru/{city}/all/"
+    return base if page == 1 else f"{base}page{page}/"
 
 # Антибот drom: не долбим сервер в лоб.
 #   - ротация User-Agent (пул реальных браузеров);
@@ -91,9 +101,9 @@ def _parse_card(card) -> dict | None:
 def scrape_drom() -> list[dict]:
     items: list[dict] = []
     first_request = True
-    for base in DROM_LIST_URLS:
+    for city in DROM_CITIES:
         for page in range(1, PAGES + 1):
-            url = base if page == 1 else f"{base}?page={page}"
+            url = _page_url(city, page)
             # вежливая задержка перед каждым запросом, кроме самого первого
             if not first_request:
                 time.sleep(random.uniform(*DELAY_RANGE))
@@ -108,10 +118,11 @@ def scrape_drom() -> list[dict]:
                 parsed = _parse_card(c)
                 if parsed:
                     items.append(parsed)
-            print(f"[drom] {url}: карточек {len(cards)}")
-    # дедуп по url в рамках одного прогона
+            print(f"[drom] {city} p{page}: карточек {len(cards)}")
+    # дедуп по url в рамках одного прогона (одно объявление может попасть
+    # в ленту нескольких городов/страниц)
     uniq = {i["url"]: i for i in items}
-    print(f"[drom] всего уникальных: {len(uniq)}")
+    print(f"[drom] собрано {len(items)}, уникальных: {len(uniq)}")
     return list(uniq.values())
 
 
