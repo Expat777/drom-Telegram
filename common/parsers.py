@@ -274,30 +274,33 @@ def normalize_drom(raw: dict) -> dict:
 def normalize_telegram(raw: dict) -> dict:
     """
     raw — строка из telegram_raw (нужны поля 'text', 'url', 'channel').
-    Тащим поля из свободного текста регулярками. Если regex не справился и
-    настроен LLM — добираем LLM-ом (см. TODO ниже).
+
+    Основной способ — LLM (понимает контекст текста, не путает адрес/платёж
+    по рассрочке с ценой авто, как иногда случалось с регулярками). Регулярки
+    остаются запасным вариантом — если LLM не настроен (пустой LLM_API_KEY)
+    или упал (сеть/лимиты/кривой ответ), чтобы normalize не улетал в пустоту.
     """
     text = raw.get("text") or ""
     out = _empty_unified("telegram", raw.get("url"))
+
+    from common.llm import parse_with_llm
+
+    llm = parse_with_llm(text)
+    if llm:
+        for k in _UNIFIED_KEYS:
+            if k in llm and llm[k] is not None:
+                out[k] = llm[k]
+        out["region"] = out.get("region") or raw.get("region")
+        return out
+
+    # Фолбэк на регулярки — LLM недоступен или ничего не вернул.
     brand, model = extract_brand_model(text)
     out["brand"] = brand
     out["model"] = model
     out["year"] = extract_year(text)
     out["price"] = extract_price(text)
     out["mileage"] = extract_mileage(text)
-    # регион: сперва из текста, иначе — гео из raw (если проставлено выше)
     out["region"] = extract_region(text) or raw.get("region")
-
-    # LLM-фолбэк: если regex не вытащил ключевые поля, а LLM настроен —
-    # добираем модель-ом. parse_with_llm сам возвращает {} при выключенном LLM
-    # или любой ошибке, поэтому это безопасно и не роняет нормализацию.
-    if out["price"] is None or out["brand"] is None:
-        from common.llm import parse_with_llm
-
-        llm = parse_with_llm(text)
-        for k, v in llm.items():
-            if k in _UNIFIED_KEYS and out.get(k) is None and v is not None:
-                out[k] = v
     return out
 
 
